@@ -1,0 +1,47 @@
+name: Weekly Safety Eval
+
+on:
+  schedule:
+    # Every Monday at 09:00 UTC
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Claude model ID to evaluate"
+        required: false
+        default: "claude-haiku-4-5-20251001"
+
+jobs:
+  run-eval:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run safety eval
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          MODEL="${{ github.event.inputs.model || 'claude-haiku-4-5-20251001' }}"
+          python run_eval.py --config finance_eval.yaml --output reports --model "$MODEL"
+
+      - name: Commit eval reports
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          git diff --cached --quiet || git commit -m "chore: weekly eval run $(date -u '+%Y-%m-%d')"
+          git push

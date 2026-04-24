@@ -3,6 +3,7 @@
 # Run with: streamlit run app.py
 
 import streamlit as st
+import streamlit.components.v1 as components
 import yaml
 import json
 import os
@@ -18,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.eval_engine import run_single_eval
 from src.evaluator import evaluate
 
-# ─── Constants ────────────────────────────────────────────────────────────────
+# --- Constants ----------------------------------------------------------------
 
 DIMENSIONS = {
     "safety":                 {"label": "Safety",              "icon": "🛡️"},
@@ -44,7 +45,7 @@ VERDICT_ICON  = {"pass": "✅ pass", "fail": "❌ fail", "uncertain": "⚠️ un
 DEFAULT_YAML   = "finance_eval.yaml"
 DEFAULT_REPORT = "reports/eval_report.json"
 
-# ─── Use Case Library ─────────────────────────────────────────────────────────
+# --- Use Case Library ---------------------------------------------------------
 
 USE_CASES = [
     {
@@ -113,7 +114,7 @@ USE_CASES = [
     },
 ]
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# --- Helpers ------------------------------------------------------------------
 
 def load_existing_report(path: str):
     if os.path.exists(path):
@@ -129,13 +130,16 @@ def build_matrix_df(results: list) -> pd.DataFrame:
     rows = []
     for r in results:
         dims = get_dims(r.get("category", ""))
+        kw = r.get("keyword_matched", [])
+        resp = r.get("response", "") or ""
         row = {
             "ID":         r.get("id", ""),
             "Category":   r.get("category", "").replace("_", " ").title(),
             "Severity":   SEVERITY_ICON.get(r.get("severity", ""), "") + " " + r.get("severity", ""),
             "Verdict":    VERDICT_ICON.get(r.get("final_verdict", ""), r.get("final_verdict", "")),
-            "Regulation": r.get("regulation", ""),
-            "Judge Note": (r.get("judge_explanation", "")[:90] + "…") if len(r.get("judge_explanation", "")) > 90 else r.get("judge_explanation", ""),
+            "Keywords":   ", ".join(kw) if kw else "—",
+            "Response":   (resp[:100] + "…") if len(resp) > 100 else resp,
+            "Judge Note": (r.get("judge_explanation", "")[:80] + "…") if len(r.get("judge_explanation", "")) > 80 else r.get("judge_explanation", ""),
         }
         for dim_key, dim_meta in DIMENSIONS.items():
             if dim_key in dims:
@@ -157,7 +161,265 @@ def build_scorecard(results: list) -> dict:
                 scores[dim][verdict] = scores[dim].get(verdict, 0) + 1
     return scores
 
-# ─── Page Config ──────────────────────────────────────────────────────────────
+
+def _esc(s: str) -> str:  # noqa: E302
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#39;")
+
+
+def render_hover_table(results: list, dim_filter: str = "All") -> None:
+    """Render results as a custom HTML table with full-content tooltips on row hover."""
+    if dim_filter != "All":
+        dk = next((k for k, v in DIMENSIONS.items() if v["label"] == dim_filter), None)
+        if dk:
+            cats = [c.replace("_", " ").title() for c, ds in DIMENSION_MAP.items() if dk in ds]
+            results = [r for r in results if r.get("category", "").replace("_", " ").title() in cats]
+
+    V_ICON = {"pass": "✅ pass", "fail": "❌ fail", "uncertain": "⚠️ uncertain"}
+    S_ICON  = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}
+
+    rows_html = []
+    for r in results:
+        kw       = r.get("keyword_matched", [])
+        resp     = (r.get("response", "") or "")
+        prompt   = (r.get("prompt", "") or "").replace("\n", " ")
+        verdict  = r.get("final_verdict", "uncertain")
+        sev      = r.get("severity", "")
+        judge    = r.get("judge_explanation", "") or ""
+        expected = r.get("expected_safe_behaviour", "") or ""
+
+        tip = (
+            f"<b>Prompt:</b><br>{_esc(prompt)}<br><br>"
+            f"<b>Expected:</b><br>{_esc(expected)}<br><br>"
+            f"<b>Keywords matched:</b> {_esc(', '.join(kw)) if kw else 'none'}<br><br>"
+            f"<b>Judge note:</b><br>{_esc(judge)}<br><br>"
+            f"<b>Model response:</b><br>{_esc(resp)}"
+        )
+
+        bg = {"fail": "rgba(220,38,38,0.08)", "uncertain": "rgba(234,179,8,0.08)"}.get(verdict, "transparent")
+
+        rows_html.append(f"""
+        <tr style="background:{bg}">
+          <td class="tip-anchor">
+            <span class="id-pill">{_esc(r.get('id',''))}</span>
+            <div class="hover-tip">{tip}</div>
+          </td>
+          <td>{V_ICON.get(verdict, verdict)}</td>
+          <td>{S_ICON.get(sev,'')} {sev}</td>
+          <td class="wrap">{_esc(prompt[:90])}{'…' if len(prompt)>90 else ''}</td>
+          <td class="mono">{_esc(', '.join(kw)) if kw else '—'}</td>
+          <td class="wrap">{_esc(resp[:100])}{'…' if len(resp)>100 else ''}</td>
+          <td class="wrap">{_esc(judge[:100])}{'…' if len(judge)>100 else ''}</td>
+        </tr>""")
+
+    table_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: "IBM Plex Sans","Segoe UI",sans-serif; font-size:12px;
+          background:#0f172a; color:#cbd5e1; }}
+  table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+  colgroup col:nth-child(1)  {{ width:80px; }}
+  colgroup col:nth-child(2)  {{ width:110px; }}
+  colgroup col:nth-child(3)  {{ width:90px; }}
+  colgroup col:nth-child(4)  {{ width:22%; }}
+  colgroup col:nth-child(5)  {{ width:15%; }}
+  colgroup col:nth-child(6)  {{ width:22%; }}
+  colgroup col:nth-child(7)  {{ width:22%; }}
+  thead th {{
+    background:#1e293b; color:#94a3b8; font-size:10px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.05em;
+    padding:6px 8px; border-bottom:1px solid #334155; text-align:left;
+  }}
+  tbody tr {{ border-bottom:1px solid #1e293b; cursor:default; }}
+  tbody tr:hover {{ background:rgba(99,102,241,0.08) !important; }}
+  td {{ padding:6px 8px; vertical-align:top; line-height:1.45; overflow:hidden; }}
+  td.wrap {{ white-space:normal; word-break:break-word; }}
+  td.mono {{ font-family:"IBM Plex Mono",monospace; font-size:11px; color:#f87171; word-break:break-all; }}
+  .id-pill {{
+    display:inline-block; background:#1e3a5f; color:#93c5fd;
+    border:1px solid #2563eb44; border-radius:4px;
+    padding:1px 6px; font-size:11px; font-weight:600; font-family:"IBM Plex Mono",monospace;
+  }}
+  /* Tooltip */
+  .tip-anchor {{ position:relative; overflow:visible !important; }}
+  .hover-tip {{
+    display:none; position:absolute; left:85px; top:0; z-index:9999;
+    width:520px; background:#0f172a; border:1px solid #334155;
+    border-radius:8px; padding:14px 16px; font-size:11px; line-height:1.6;
+    color:#cbd5e1; box-shadow:0 8px 32px rgba(0,0,0,.6); pointer-events:none;
+  }}
+  .hover-tip b {{ color:#e2e8f0; }}
+  tr:hover .hover-tip {{ display:block; }}
+</style>
+</head>
+<body>
+<table>
+  <colgroup>
+    <col/><col/><col/><col/><col/><col/><col/>
+  </colgroup>
+  <thead>
+    <tr>
+      <th>ID</th><th>Verdict</th><th>Severity</th>
+      <th>Prompt</th><th>Keywords</th><th>Response</th><th>Judge Note</th>
+    </tr>
+  </thead>
+  <tbody>
+    {"".join(rows_html)}
+  </tbody>
+</table>
+</body>
+</html>"""
+
+    row_height = 42
+    header_h   = 36
+    height     = header_h + len(results) * row_height + 20
+    components.html(table_html, height=height, scrolling=False)
+
+
+def render_compare_table(run_a: list, run_b: list, label_a: str, label_b: str) -> None:
+    """Side-by-side comparison table with full-content hover tooltip per row."""
+    V_ICON = {"pass": "✅ pass", "fail": "❌ fail", "uncertain": "⚠️ unc.", "—": "—"}
+    S_ICON = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}
+
+    a_by_id = {r["id"]: r for r in run_a}
+    b_by_id = {r["id"]: r for r in run_b}
+    all_ids = sorted({r["id"] for r in run_a + run_b}, key=lambda x: (x.split("-")[0], int(x.split("-")[1]) if x.split("-")[1].isdigit() else 0))
+
+    rows_html = []
+    for id_ in all_ids:
+        ra  = a_by_id.get(id_, {})
+        rb  = b_by_id.get(id_, {})
+        va  = ra.get("final_verdict", "—")
+        vb  = rb.get("final_verdict", "—")
+        changed = va != vb
+
+        sev     = ra.get("severity", rb.get("severity", ""))
+        prompt  = (ra.get("prompt", rb.get("prompt", "")) or "").replace("\n", " ")
+        expected= (ra.get("expected_safe_behaviour", rb.get("expected_safe_behaviour","")) or "")
+        kw_a    = ra.get("keyword_matched", [])
+        kw_b    = rb.get("keyword_matched", [])
+        resp_a  = (ra.get("response","") or "")
+        resp_b  = (rb.get("response","") or "")
+        judge_a = (ra.get("judge_explanation","") or "")
+        judge_b = (rb.get("judge_explanation","") or "")
+
+        # Row background: highlight changed rows
+        if changed and vb in ("fail","uncertain"):
+            bg = "rgba(220,38,38,0.10)"      # regression — got worse
+        elif changed and va in ("fail","uncertain"):
+            bg = "rgba(34,197,94,0.10)"       # improvement — got better
+        else:
+            bg = "transparent"
+
+        change_icon = "🔴 regression" if (changed and vb in ("fail","uncertain")) else \
+                      "🟢 improved"   if (changed and va in ("fail","uncertain")) else \
+                      "🔄 changed"    if changed else ""
+
+        tip = (
+            f"<b style='color:#e2e8f0'>Prompt:</b><br>{_esc(prompt)}<br><br>"
+            f"<b style='color:#e2e8f0'>Expected:</b><br>{_esc(expected)}<br><br>"
+            f"<hr style='border-color:#334155;margin:8px 0'>"
+            f"<b style='color:#93c5fd'>{_esc(label_a)} response:</b><br>{_esc(resp_a[:600])}<br>"
+            f"<b style='color:#93c5fd'>{_esc(label_a)} keywords:</b> {_esc(', '.join(kw_a)) if kw_a else 'none'}<br>"
+            f"<b style='color:#93c5fd'>{_esc(label_a)} judge:</b> {_esc(judge_a)}<br><br>"
+            f"<hr style='border-color:#334155;margin:8px 0'>"
+            f"<b style='color:#86efac'>{_esc(label_b)} response:</b><br>{_esc(resp_b[:600])}<br>"
+            f"<b style='color:#86efac'>{_esc(label_b)} keywords:</b> {_esc(', '.join(kw_b)) if kw_b else 'none'}<br>"
+            f"<b style='color:#86efac'>{_esc(label_b)} judge:</b> {_esc(judge_b)}"
+        )
+
+        rows_html.append(f"""
+        <tr style="background:{bg}">
+          <td class="tip-anchor">
+            <span class="id-pill">{_esc(id_)}</span>
+            <div class="hover-tip">{tip}</div>
+          </td>
+          <td>{S_ICON.get(sev,'')} {sev}</td>
+          <td class="change-col">{change_icon}</td>
+          <td class="wrap">{_esc(prompt[:85])}{'…' if len(prompt)>85 else ''}</td>
+          <td class="mono kw-a">{_esc(', '.join(kw_a)) if kw_a else '—'}</td>
+          <td class="verdict-a">{V_ICON.get(va,va)}</td>
+          <td class="mono kw-b">{_esc(', '.join(kw_b)) if kw_b else '—'}</td>
+          <td class="verdict-b">{V_ICON.get(vb,vb)}</td>
+          <td class="wrap judge-b">{_esc(judge_b[:90])}{'…' if len(judge_b)>90 else ''}</td>
+        </tr>""")
+
+    la_e = _esc(label_a)
+    lb_e = _esc(label_b)
+
+    table_html = f"""
+<!DOCTYPE html><html><head>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:"IBM Plex Sans","Segoe UI",sans-serif; font-size:12px; background:#0f172a; color:#cbd5e1; }}
+  table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+  colgroup col:nth-child(1) {{ width:80px; }}
+  colgroup col:nth-child(2) {{ width:80px; }}
+  colgroup col:nth-child(3) {{ width:110px; }}
+  colgroup col:nth-child(4) {{ width:20%; }}
+  colgroup col:nth-child(5) {{ width:12%; }}
+  colgroup col:nth-child(6) {{ width:95px; }}
+  colgroup col:nth-child(7) {{ width:12%; }}
+  colgroup col:nth-child(8) {{ width:95px; }}
+  colgroup col:nth-child(9) {{ width:auto; }}
+  thead th {{
+    background:#1e293b; color:#94a3b8; font-size:10px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.05em;
+    padding:6px 8px; border-bottom:1px solid #334155; text-align:left;
+  }}
+  thead th.col-a {{ color:#93c5fd; }}
+  thead th.col-b {{ color:#86efac; }}
+  tbody tr {{ border-bottom:1px solid #1e293b; cursor:default; }}
+  tbody tr:hover {{ filter:brightness(1.15); }}
+  td {{ padding:6px 8px; vertical-align:top; line-height:1.45; overflow:hidden; }}
+  td.wrap {{ white-space:normal; word-break:break-word; }}
+  td.mono {{ font-family:"IBM Plex Mono",monospace; font-size:10px; color:#f87171; word-break:break-all; }}
+  td.change-col {{ font-size:11px; white-space:nowrap; }}
+  td.verdict-a {{ color:#93c5fd; font-size:11px; }}
+  td.verdict-b {{ color:#86efac; font-size:11px; }}
+  td.judge-b {{ color:#cbd5e1; }}
+  .id-pill {{
+    display:inline-block; background:#1e3a5f; color:#93c5fd;
+    border:1px solid #2563eb44; border-radius:4px;
+    padding:1px 6px; font-size:11px; font-weight:600; font-family:"IBM Plex Mono",monospace;
+  }}
+  .tip-anchor {{ position:relative; overflow:visible !important; }}
+  .hover-tip {{
+    display:none; position:absolute; left:85px; top:0; z-index:9999;
+    width:580px; background:#0f172a; border:1px solid #334155;
+    border-radius:8px; padding:14px 16px; font-size:11px; line-height:1.6;
+    color:#cbd5e1; box-shadow:0 8px 32px rgba(0,0,0,.7); pointer-events:none;
+  }}
+  tr:hover .hover-tip {{ display:block; }}
+</style>
+</head><body>
+<table>
+  <colgroup><col/><col/><col/><col/><col/><col/><col/><col/><col/></colgroup>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Severity</th>
+      <th>Change</th>
+      <th>Prompt</th>
+      <th class="col-a">KW — {la_e}</th>
+      <th class="col-a">Verdict — {la_e}</th>
+      <th class="col-b">KW — {lb_e}</th>
+      <th class="col-b">Verdict — {lb_e}</th>
+      <th class="col-b">Judge Note — {lb_e}</th>
+    </tr>
+  </thead>
+  <tbody>{"".join(rows_html)}</tbody>
+</table>
+</body></html>"""
+
+    row_height = 44
+    header_h   = 36
+    height     = header_h + len(all_ids) * row_height + 20
+    components.html(table_html, height=height, scrolling=False)
+
+# --- Page Config --------------------------------------------------------------
 
 st.set_page_config(
     page_title="SE1 — LLM Safety Eval",
@@ -165,7 +427,55 @@ st.set_page_config(
     layout="wide",
 )
 
-# ─── Session State ────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  html, body, [class*="css"] {
+    font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    font-size: 12px;
+  }
+  p, li, label, .stMarkdown {
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  h1 { font-size: 20px !important; font-weight: 600; }
+  h2 { font-size: 16px !important; font-weight: 600; }
+  h3 { font-size: 14px !important; font-weight: 500; }
+  section[data-testid="stSidebar"] {
+    font-size: 11px;
+  }
+  section[data-testid="stSidebar"] > div:first-child {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+  [data-testid="stMetric"] {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+  }
+  [data-testid="stMetricLabel"] { font-size: 10px; font-weight: 500; }
+  [data-testid="stMetricValue"] { font-size: 18px; font-weight: 600; }
+  [data-testid="stDataFrame"] table td,
+  [data-testid="stDataFrame"] table th {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    padding: 0.3rem 0.5rem;
+  }
+  [data-testid="stExpander"] summary { font-size: 12px; font-weight: 500; }
+  [data-testid="stButton"] button[kind="primary"] {
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 0.35rem 1rem;
+  }
+  [data-testid="stCaptionContainer"], small { font-size: 10px; opacity: 0.7; }
+  code, pre { font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+</style>
+""", unsafe_allow_html=True)
+
+# --- Session State ------------------------------------------------------------
 
 for key, default in [
     ("run_a", None), ("run_a_label", None),
@@ -176,12 +486,12 @@ for key, default in [
     if key not in st.session_state:
         st.session_state[key] = default
 
-# ─── API Key Check ────────────────────────────────────────────────────────────
+# --- API Key Check ------------------------------------------------------------
 
 if not os.getenv("ANTHROPIC_API_KEY"):
     st.error("ANTHROPIC_API_KEY not set. Add it to your .env file before running evals.")
 
-# ─── Sidebar ──────────────────────────────────────────────────────────────────
+# --- Sidebar ------------------------------------------------------------------
 
 with st.sidebar:
     st.title("🛡️ SE1 Safety Eval")
@@ -216,7 +526,7 @@ with st.sidebar:
     st.caption("Phase 1 of SE1 Safety Suite")
     st.caption("[github.com/pretzelslab/se1-safety-eval](https://github.com/pretzelslab/se1-safety-eval)")
 
-# ─── Header ───────────────────────────────────────────────────────────────────
+# --- Header -------------------------------------------------------------------
 
 st.title("LLM Safety Eval Framework")
 if selected_uc:
@@ -224,7 +534,7 @@ if selected_uc:
 else:
     st.caption("Select a use case from the sidebar, or run the full test suite.")
 
-# ─── YAML Editor ──────────────────────────────────────────────────────────────
+# --- YAML Editor --------------------------------------------------------------
 
 with st.expander("📝 Test Suite Editor", expanded=not bool(st.session_state.current_results)):
     st.caption("Edit prompts, expected behaviours, or severity before running. Changes apply to the next run only — does not modify finance_eval.yaml on disk.")
@@ -237,7 +547,7 @@ with st.expander("📝 Test Suite Editor", expanded=not bool(st.session_state.cu
     if yaml_input != st.session_state.yaml_content:
         st.session_state.yaml_content = yaml_input
 
-# ─── Run Controls ─────────────────────────────────────────────────────────────
+# --- Run Controls -------------------------------------------------------------
 
 col_btn, col_lbl, col_gap = st.columns([1, 2, 5])
 with col_btn:
@@ -284,7 +594,7 @@ if run_clicked:
     st.success(f"Done — {len(results)} cases evaluated. Label: **{label}**")
     st.rerun()
 
-# ─── Results ──────────────────────────────────────────────────────────────────
+# --- Results ------------------------------------------------------------------
 
 if not st.session_state.current_results:
     st.info("No results yet. Run an eval above, or place `reports/eval_report.json` in the project root to auto-load.")
@@ -317,7 +627,7 @@ tab_matrix, tab_compare, tab_issues = st.tabs([
     "🚨 Issues Only",
 ])
 
-# ─── TAB 1: Compliance Matrix ──────────────────────────────────────────────────
+# --- TAB 1: Compliance Matrix --------------------------------------------------
 
 with tab_matrix:
     # Scorecard
@@ -356,9 +666,9 @@ with tab_matrix:
             relevant_display = [c.replace("_", " ").title() for c in relevant]
             df = df[df["Category"].isin(relevant_display)]
 
-    st.dataframe(df, width='stretch', hide_index=True)
+    render_hover_table(results, dim_filter)
 
-# ─── TAB 2: Compare Runs ──────────────────────────────────────────────────────
+# --- TAB 2: Compare Runs ------------------------------------------------------
 
 with tab_compare:
     if not st.session_state.run_a or not st.session_state.run_b:
@@ -387,28 +697,9 @@ with tab_compare:
 
         st.divider()
 
-        a_by_id = {r["id"]: r for r in run_a}
-        b_by_id = {r["id"]: r for r in run_b}
-        all_ids = sorted({r["id"] for r in run_a + run_b})
+        render_compare_table(run_a, run_b, label_a, label_b)
 
-        rows = []
-        for id_ in all_ids:
-            ra, rb = a_by_id.get(id_, {}), b_by_id.get(id_, {})
-            va, vb = ra.get("final_verdict", "—"), rb.get("final_verdict", "—")
-            rows.append({
-                "ID":                         id_,
-                "Category":                   ra.get("category", rb.get("category","")).replace("_"," ").title(),
-                "Severity":                   SEVERITY_ICON.get(ra.get("severity",""),"") + " " + ra.get("severity",""),
-                f"{label_a}":                 VERDICT_ICON.get(va, va),
-                f"{label_b}":                 VERDICT_ICON.get(vb, vb),
-                "Changed":                    "🔄" if va != vb else "",
-                f"{label_b} judge note":      (rb.get("judge_explanation","")[:90]+"…") if len(rb.get("judge_explanation",""))>90 else rb.get("judge_explanation",""),
-            })
-
-        cdf = pd.DataFrame(rows).sort_values("Changed", ascending=False)
-        st.dataframe(cdf, width='stretch', hide_index=True)
-
-# ─── TAB 3: Issues Only ───────────────────────────────────────────────────────
+# --- TAB 3: Issues Only -------------------------------------------------------
 
 with tab_issues:
     issues = [r for r in results if r.get("final_verdict") in ("fail", "uncertain")]
