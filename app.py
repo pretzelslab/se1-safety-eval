@@ -241,7 +241,7 @@ with st.expander("📝 Test Suite Editor", expanded=not bool(st.session_state.cu
 
 col_btn, col_lbl, col_gap = st.columns([1, 2, 5])
 with col_btn:
-    run_clicked = st.button("▶ Run Eval", type="primary", use_container_width=True)
+    run_clicked = st.button("▶ Run Eval", type="primary", use_container_width=False)
 with col_lbl:
     run_label = st.text_input("Label", placeholder="e.g. after system prompt fix", label_visibility="collapsed")
 
@@ -356,7 +356,7 @@ with tab_matrix:
             relevant_display = [c.replace("_", " ").title() for c in relevant]
             df = df[df["Category"].isin(relevant_display)]
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width='stretch', hide_index=True)
 
 # ─── TAB 2: Compare Runs ──────────────────────────────────────────────────────
 
@@ -406,7 +406,7 @@ with tab_compare:
             })
 
         cdf = pd.DataFrame(rows).sort_values("Changed", ascending=False)
-        st.dataframe(cdf, use_container_width=True, hide_index=True)
+        st.dataframe(cdf, width='stretch', hide_index=True)
 
 # ─── TAB 3: Issues Only ───────────────────────────────────────────────────────
 
