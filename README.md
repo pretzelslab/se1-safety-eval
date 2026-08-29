@@ -3,7 +3,7 @@
 
 A systematic safety evaluation framework for LLMs deployed in financial services. Sends adversarial test prompts across five risk categories, judges each response using Claude-as-evaluator, scores failures by severity, and maps them to regulatory obligations.
 
-Built as Phase 1 of a production safety engineering stack for AI systems in regulated environments.
+Part of a broader safety engineering stack for evaluating and governing AI systems in regulated environments.
 
 ---
 
